@@ -10,8 +10,6 @@ jobs:
   sync-linear:
     name: Sync Linear Issue State
     runs-on: ubuntu-latest
-    if: vars.LINEAR_API_KEY != ''
-
     steps:
       - uses: actions/checkout@v4
 
