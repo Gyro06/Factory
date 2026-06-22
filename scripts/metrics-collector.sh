@@ -206,11 +206,13 @@ RTK_SESSIONS="${RTK_SESSIONS:-0}"
 MCP_JSON="[]"
 MCP_FILE="${FACTORY_ROOT}/mcp/mcp.factory.json"
 if [[ -f "$MCP_FILE" ]]; then
+  # cygpath -m converts POSIX path to Windows mixed (forward slashes) for Node on Windows
+  MCP_FILE_NODE=$(cygpath -m "$MCP_FILE" 2>/dev/null || echo "$MCP_FILE")
   MCP_JSON=$(node -e "
-    const d = JSON.parse(require('fs').readFileSync('${MCP_FILE}', 'utf8'));
+    const d = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
     const out = Object.entries(d.mcpServers || {}).map(([k,v]) => ({name:k, active:!v.disabled}));
     process.stdout.write(JSON.stringify(out));
-  " 2>/dev/null || echo "[]")
+  " "$MCP_FILE_NODE" 2>/dev/null || echo "[]")
 fi
 
 # ── Write metrics.json ─────────────────────────────────────────────────────────
