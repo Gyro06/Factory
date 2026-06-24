@@ -39,13 +39,13 @@ export async function POST(
     const storageKey = `${user.id}/${assignmentId}/${randomUUID()}.${ext}`;
     const buffer = Buffer.from(await file.arrayBuffer());
 
+    // R2 encrypts all objects at rest by default; ServerSideEncryption param is not supported
     await r2.send(
       new PutObjectCommand({
         Bucket: BUCKET,
         Key: storageKey,
         Body: buffer,
         ContentType: file.type,
-        ServerSideEncryption: "AES256",
         Metadata: {
           userId: user.id,
           assignmentId,
