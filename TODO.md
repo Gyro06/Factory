@@ -2,6 +2,45 @@
 
 ## Out-of-Scope Issues Found
 
+### Notary Control Hub (AST-42 scaffold)
+
+#### Security
+- [ ] Document upload currently uses native form POST — should be replaced with a client-side fetch with CSRF token validation in a future iteration
+  - Location: `projects/notary-control-hub/src/app/(app)/assignments/[id]/page.tsx` DocumentUploader
+  - Risk: Low (Clerk protects the API endpoint, Next.js App Router mitigates most CSRF risk)
+  - Suggested fix: Migrate to a client component with fetch-based upload for better error handling
+
+- [ ] Presigned URL redirect in `/api/documents/[id]` GET exposes the R2 URL in the Location header — browser sees the signed URL
+  - Location: `projects/notary-control-hub/src/app/api/documents/[id]/route.ts`
+  - Risk: Low (URLs are short-lived 15 min TTL) but could be captured in logs
+  - Suggested fix: Consider streaming the file through the server rather than redirecting for higher-sensitivity docs
+
+#### Missing Features / Incomplete Flows
+- [ ] Contacts — `/contacts/new` page and `/contacts/[id]` detail page not yet built (AST-46)
+  - Path: `src/app/(app)/contacts/new/page.tsx`, `src/app/(app)/contacts/[id]/page.tsx`
+- [ ] Invoice detail page `/invoices/[id]` not yet built (AST-47)
+  - Path: `src/app/(app)/invoices/[id]/page.tsx`
+- [ ] PDF export for invoices not yet implemented (AST-47)
+- [ ] Invoice new page `/invoices/new` not yet built (AST-47)
+- [ ] Webhook for Clerk user creation not yet built — `getOrCreateDbUser` creates user lazily on first request
+  - Location: `src/lib/auth.ts`
+  - Suggested fix: Add `/api/webhooks/clerk` route to handle `user.created` event
+
+#### Technical Debt
+- [ ] `generateInvoiceNumber()` in `src/app/api/invoices/route.ts` uses random numbers — not guaranteed unique
+  - Location: `projects/notary-control-hub/src/app/api/invoices/route.ts`
+  - Suggested fix: Use a DB sequence or year+sequential counter per user
+
+- [ ] StatusBadge component is duplicated across assignments list page and assignment detail page — should be extracted to a shared component
+  - Location: `src/app/(app)/assignments/page.tsx` and `src/app/(app)/assignments/[id]/page.tsx`
+
+#### Future Enhancements
+- [ ] Email invoice via Resend (AST-47)
+- [ ] RON integration — platform-specific workflow support
+- [ ] Audit log viewer page for user to review their own activity
+- [ ] Settings page profile editing (notary state, stamp/E&O expiry)
+- [ ] Export assignment history as CSV
+
 ### Future Enhancements
 
 - [x] Linear workflow integration — ✅ COMPLETE (Phase 7)
