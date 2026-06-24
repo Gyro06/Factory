@@ -1,7 +1,7 @@
 import { getOrCreateDbUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { formatCurrency, formatDate } from "@/lib/utils";
-import { INVOICE_STATUS_LABELS } from "@/types";
+import { InvoiceStatusBadge } from "@/components/ui/status-badge";
 import Link from "next/link";
 
 export default async function InvoicesPage() {
@@ -17,6 +17,12 @@ export default async function InvoicesPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold text-slate-900">Invoices</h1>
+        <Link
+          href="/invoices/new"
+          className="rounded-md bg-blue-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-800"
+        >
+          New Invoice
+        </Link>
       </div>
 
       {invoices.length === 0 ? (
@@ -67,7 +73,7 @@ export default async function InvoicesPage() {
                       "—"}
                   </td>
                   <td className="px-4 py-3">
-                    <InvoiceStatusBadge status={inv.status} />
+                    <InvoiceStatusBadge status={String(inv.status)} />
                   </td>
                   <td className="px-4 py-3 text-slate-600">
                     {formatDate(inv.issuedAt)}
@@ -88,20 +94,3 @@ export default async function InvoicesPage() {
   );
 }
 
-function InvoiceStatusBadge({ status }: { status: string }) {
-  const colors: Record<string, string> = {
-    DRAFT: "bg-slate-100 text-slate-700",
-    SENT: "bg-blue-100 text-blue-700",
-    PAID: "bg-emerald-100 text-emerald-700",
-    OVERDUE: "bg-red-100 text-red-700",
-    CANCELLED: "bg-slate-100 text-slate-500",
-  };
-
-  return (
-    <span
-      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${colors[status] ?? "bg-slate-100 text-slate-700"}`}
-    >
-      {INVOICE_STATUS_LABELS[status] ?? status}
-    </span>
-  );
-}
