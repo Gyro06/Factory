@@ -6,10 +6,18 @@ set -euo pipefail
 
 FACTORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT="${FACTORY_ROOT}/dashboards/observation-deck/metrics.json"
+
+# Source Factory .env if it exists (so the script works without manual env exports)
+if [[ -f "${FACTORY_ROOT}/.env" ]]; then
+  set -a; source "${FACTORY_ROOT}/.env"; set +a
+fi
+
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"
 LANGFUSE_PUBLIC_KEY="${LANGFUSE_PUBLIC_KEY:-}"
 LANGFUSE_SECRET_KEY="${LANGFUSE_SECRET_KEY:-}"
-LANGFUSE_HOST="${LANGFUSE_HOST:-https://cloud.langfuse.com}"
+# Accept either LANGFUSE_HOST (legacy) or LANGFUSE_BASE_URL (official SDK name)
+LANGFUSE_HOST="${LANGFUSE_HOST:-${LANGFUSE_BASE_URL:-https://cloud.langfuse.com}}"
+LANGFUSE_CONNECTED=false
 DAYS=7
 REPO=""
 
@@ -45,6 +53,22 @@ CODEX_BLOCKS=0
 if [[ -n "$GITHUB_TOKEN" && -n "$REPO" ]]; then
   echo "[collecting] GitHub PR metrics..."
 
+  # GitHub's API is pretty-printed JSON ("key": value, with a space after the
+  # colon) — naive no-space regexes like '"total_count":[0-9]*' silently
+  # zero-width-match and return empty strings instead of failing loudly, which
+  # is why every PR metric used to report as 0 even when the API call itself
+  # succeeded. Parse properly with node instead of grep for every count below.
+  json_total_count() {
+    node -e '
+      let input = "";
+      process.stdin.on("data", (d) => { input += d; });
+      process.stdin.on("end", () => {
+        try { process.stdout.write(String(JSON.parse(input).total_count ?? 0)); }
+        catch { process.stdout.write("0"); }
+      });
+    ' 2>/dev/null || echo "0"
+  }
+
   # Merged PRs this week
   MERGED_RESPONSE=$(curl -sf \
     "https://api.github.com/search/issues?q=repo:${REPO}+is:pr+is:merged+merged:>=${SINCE_DATE}&per_page=100" \
@@ -52,35 +76,82 @@ if [[ -n "$GITHUB_TOKEN" && -n "$REPO" ]]; then
     -H "Accept: application/vnd.github+json" 2>/dev/null) || true
 
   if [[ -n "$MERGED_RESPONSE" ]]; then
-    MERGED_PRS=$(echo "$MERGED_RESPONSE" | grep -o '"total_count":[0-9]*' | grep -o '[0-9]*' | head -1 || echo "0")
+    MERGED_PRS=$(echo "$MERGED_RESPONSE" | json_total_count)
+
+    # Average cycle time (created → closed) in hours, across merged PRs in this page.
+    # closed_at is used as a merge-time proxy — exact for PRs merged via the normal
+    # merge button/API, which covers the overwhelming majority of cases.
+    CYCLE_STATS=$(echo "$MERGED_RESPONSE" | node -e '
+      let input = "";
+      process.stdin.on("data", (d) => { input += d; });
+      process.stdin.on("end", () => {
+        try {
+          const items = (JSON.parse(input).items || []);
+          let totalHours = 0, n = 0;
+          for (const item of items) {
+            const created = new Date(item.created_at).getTime();
+            const closed = new Date(item.closed_at).getTime();
+            if (!Number.isNaN(created) && !Number.isNaN(closed) && closed > created) {
+              totalHours += (closed - created) / 3600000;
+              n += 1;
+            }
+          }
+          process.stdout.write(`${totalHours} ${n}`);
+        } catch {
+          process.stdout.write("0 0");
+        }
+      });
+    ' 2>/dev/null || echo "0 0")
+    CYCLE_TOTAL_HOURS=$(echo "$CYCLE_STATS" | awk '{print $1}')
+    CYCLE_PR_COUNT=$(echo "$CYCLE_STATS" | awk '{print $2}')
+    if [[ "${CYCLE_PR_COUNT:-0}" -gt 0 ]] 2>/dev/null; then
+      AVG_CYCLE_HOURS=$(echo "scale=1; ${CYCLE_TOTAL_HOURS} / ${CYCLE_PR_COUNT}" | bc 2>/dev/null || echo "0")
+    fi
   fi
 
-  # Open PRs
+  # Open PRs — same search-API pattern as merged PRs above, for a real count
+  # (previously fetched via a HEAD request whose response was never parsed).
   OPEN_RESPONSE=$(curl -sf \
-    "https://api.github.com/repos/${REPO}/pulls?state=open&per_page=1" \
+    "https://api.github.com/search/issues?q=repo:${REPO}+is:pr+is:open&per_page=1" \
     -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-    -H "Accept: application/vnd.github+json" -I 2>/dev/null) || true
+    -H "Accept: application/vnd.github+json" 2>/dev/null) || true
+  if [[ -n "$OPEN_RESPONSE" ]]; then
+    OPEN_PRS=$(echo "$OPEN_RESPONSE" | json_total_count)
+  fi
 
   # Count Codex block verdicts in PR comments (look for "### Verdict\nBlock")
-  if [[ $MERGED_PRS -gt 0 ]]; then
+  if [[ "${MERGED_PRS:-0}" -gt 0 ]] 2>/dev/null; then
     CODEX_BLOCKS=$(curl -sf \
       "https://api.github.com/search/issues?q=repo:${REPO}+is:pr+is:merged+merged:>=${SINCE_DATE}+in:comments+%22Verdict%0ABlock%22&per_page=1" \
       -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-      -H "Accept: application/vnd.github+json" 2>/dev/null \
-      | grep -o '"total_count":[0-9]*' | grep -o '[0-9]*' | head -1 || echo "0")
+      -H "Accept: application/vnd.github+json" 2>/dev/null | json_total_count)
   fi
 
-  # CI check run stats (sample latest 10 runs)
+  # CI check run stats (sample runs created in the period)
   RUN_RESPONSE=$(curl -sf \
     "https://api.github.com/repos/${REPO}/actions/runs?per_page=20&created=>=${SINCE_DATE}" \
     -H "Authorization: Bearer ${GITHUB_TOKEN}" \
     -H "Accept: application/vnd.github+json" 2>/dev/null) || true
 
   if [[ -n "$RUN_RESPONSE" ]]; then
-    TOTAL_RUNS=$(echo "$RUN_RESPONSE" | grep -o '"total_count":[0-9]*' | grep -o '[0-9]*' | head -1 || echo "0")
-    SUCCESS_RUNS=$(echo "$RUN_RESPONSE" | grep -o '"conclusion":"success"' | wc -l || echo "0")
-    if [[ $TOTAL_RUNS -gt 0 ]]; then
-      CI_PASS_RATE=$(( SUCCESS_RUNS * 100 / ($(echo "$RUN_RESPONSE" | grep -o '"conclusion":"[^"]*"' | grep -v "null" | wc -l) + 1) ))
+    CI_STATS=$(echo "$RUN_RESPONSE" | node -e '
+      let input = "";
+      process.stdin.on("data", (d) => { input += d; });
+      process.stdin.on("end", () => {
+        try {
+          const runs = (JSON.parse(input).workflow_runs || []);
+          const concluded = runs.filter((r) => r.conclusion !== null);
+          const success = concluded.filter((r) => r.conclusion === "success").length;
+          process.stdout.write(`${success} ${concluded.length}`);
+        } catch {
+          process.stdout.write("0 0");
+        }
+      });
+    ' 2>/dev/null || echo "0 0")
+    SUCCESS_RUNS=$(echo "$CI_STATS" | awk '{print $1}')
+    CONCLUDED_RUNS=$(echo "$CI_STATS" | awk '{print $2}')
+    if [[ "${CONCLUDED_RUNS:-0}" -gt 0 ]] 2>/dev/null; then
+      CI_PASS_RATE=$(( SUCCESS_RUNS * 100 / CONCLUDED_RUNS ))
     fi
   fi
 
@@ -152,24 +223,36 @@ RTK_TOKENS_SAVED=0
 
 if [[ -n "$LANGFUSE_PUBLIC_KEY" && -n "$LANGFUSE_SECRET_KEY" ]]; then
   echo "[collecting] Langfuse cost metrics..."
-  LANGFUSE_AUTH=$(echo -n "${LANGFUSE_PUBLIC_KEY}:${LANGFUSE_SECRET_KEY}" | base64)
+  LANGFUSE_AUTH=$(echo -n "${LANGFUSE_PUBLIC_KEY}:${LANGFUSE_SECRET_KEY}" | base64 | tr -d '\n\r')
 
-  USAGE=$(curl -sf "${LANGFUSE_HOST}/api/public/metrics/usage?fromTimestamp=${SINCE_DATE}" \
+  # Verify connectivity with a lightweight traces ping first
+  PING=$(curl -sf "${LANGFUSE_HOST}/api/public/traces?limit=1" \
     -H "Authorization: Basic ${LANGFUSE_AUTH}" \
     -H "Accept: application/json" 2>/dev/null) || true
 
-  if [[ -n "$USAGE" ]]; then
-    # Extract totals from Langfuse response
-    TOTAL_TOKENS=$(echo "$USAGE" | grep -o '"totalTokens":[0-9]*' | grep -o '[0-9]*' | head -1 || echo "0")
-    TOTAL_COST=$(echo "$USAGE" | grep -o '"totalCost":[0-9.]*' | grep -o '[0-9.]*' | head -1 || echo "0")
-    # Approximate split: assume Claude = 60%, Codex = 25%, Ollama = 15%
-    CLAUDE_TOKENS=$(( TOTAL_TOKENS * 60 / 100 ))
-    CODEX_TOKENS=$(( TOTAL_TOKENS * 25 / 100 ))
-    OLLAMA_TASKS=$(( TOTAL_TOKENS * 15 / 100 / 200 ))  # avg ~200 tokens per Ollama task
-    echo "[ok]  Langfuse: ~$${TOTAL_COST} total, ${TOTAL_TOKENS} tokens"
+  if [[ -n "$PING" ]]; then
+    LANGFUSE_CONNECTED=true
+
+    # Fetch daily usage breakdown (Langfuse v2+ endpoint)
+    USAGE=$(curl -sf "${LANGFUSE_HOST}/api/public/metrics/daily?fromTimestamp=${SINCE_DATE}" \
+      -H "Authorization: Basic ${LANGFUSE_AUTH}" \
+      -H "Accept: application/json" 2>/dev/null) || true
+
+    if [[ -n "$USAGE" ]]; then
+      # Sum across all days: data[].totalCost and data[].totalTokens
+      TOTAL_TOKENS=$(echo "$USAGE" | grep -o '"totalTokens":[0-9]*' | grep -o '[0-9]*' | awk '{s+=$1} END {print s+0}' || echo "0")
+      TOTAL_COST=$(echo "$USAGE" | grep -o '"totalCost":[0-9.]*' | grep -o '[0-9.]*' | awk '{s+=$1} END {printf "%.4f",s}' || echo "0")
+      # Approximate split: Claude = 60%, Codex = 25%, Ollama = 15%
+      CLAUDE_TOKENS=$(( TOTAL_TOKENS * 60 / 100 ))
+      CODEX_TOKENS=$(( TOTAL_TOKENS * 25 / 100 ))
+      OLLAMA_TASKS=$(( TOTAL_TOKENS * 15 / 100 / 200 ))
+    fi
+    echo "[ok]  Langfuse: connected, ~\$${TOTAL_COST} total, ${TOTAL_TOKENS} tokens"
+  else
+    echo "[warn] Langfuse credentials set but API unreachable (wrong key or host?)"
   fi
 else
-  echo "[warn] Langfuse credentials not set — cost metrics will show as zero"
+  echo "[warn] LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY not set — cost metrics will show as zero"
 fi
 
 # ── Workforce distribution heuristic ──────────────────────────────────────────
@@ -230,6 +313,7 @@ cat > "$OUTPUT" <<JSON
     "human": ${HUMAN_PCT},
     "other": $(( 100 - CLAUDE_PCT - CODEX_PCT - OLLAMA_PCT - HUMAN_PCT ))
   },
+  "langfuse_connected": ${LANGFUSE_CONNECTED},
   "cost": {
     "total": ${TOTAL_COST},
     "saved_rtk": ${RTK_SAVINGS},
