@@ -3,6 +3,12 @@
 ## [Unreleased] — 2026-06-30
 
 ### Changed
+- Merge pull request #3 from Gyro06/feature/AST-49-invoice-ui
+
+
+## [Unreleased] — 2026-06-30
+
+### Changed
 - Merge pull request #4 from Gyro06/fix/AST-pr-velocity-metrics
 
 
