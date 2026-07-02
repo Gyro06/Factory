@@ -111,6 +111,21 @@ Claude **may not** proceed autonomously on any of the following — always stop 
 
 ---
 
+## Skills
+
+`.claude/skills/` holds vendored Agent Skills. Each is pinned to a specific
+upstream commit — do not let `/plugin` or CLI tooling auto-update past the
+pinned SHA noted in the skill's own file without a re-review.
+
+- **self-learning** (`.claude/skills/self-learning/`) — harvests hard-won
+  "golden path" procedures from a session into a new project-local skill, so
+  future sessions start already knowing them. It may autonomously write/update
+  files only under `.claude/skills/` and this repo's `MEMORY.md`-style notes.
+  It is **never** authorization to bypass the Human Approval Gates above —
+  harvesting a golden path is documentation, not an approved action.
+
+---
+
 ## MCP Server Usage Guide
 
 | Operation | Use this MCP |
