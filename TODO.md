@@ -113,6 +113,11 @@
 
 ### Security
 
+- [ ] `self-learning` skill provenance — upstream `github.com/Kulaxyz/self-learning-skills` is a new repo (created 2026-06-28) from a single unverified author, with high star velocity for its age
+  - Location: `.claude/skills/self-learning/`
+  - Risk: Low today (content is inert Markdown, no code execution, vendored/pinned rather than live-fetched) but the account or repo could turn adversarial later
+  - Suggested fix: Before ever re-syncing past the pinned commit (`d4e0a7ec1f1ae1b5c7f7972b52ad8ed0c2c067ae`), re-run the safety review; do not switch to the live `/plugin marketplace` or `npx skills` install paths for this skill
+
 - [ ] MCP server authentication — verify all custom MCP connections enforce token-based auth
   - Location: `mcp/mcp.factory.json`, `mcp/servers/` (Phase 3)
   - Risk: Unauthenticated MCP servers in devcontainer could be exploited if the container is network-exposed
