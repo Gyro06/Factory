@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased] — 2026-07-02
+
+### Changed
+- Merge pull request #5 from Gyro06/feature/AST-93-self-learning-skill
+
+
 ## [Unreleased] — 2026-06-30
 
 ### Changed
